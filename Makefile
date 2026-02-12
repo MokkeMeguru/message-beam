@@ -1,10 +1,15 @@
-.PHONY: install emulator mock-server pipeline generate all
+.PHONY: install emulator stop-emulator mock-server pipeline generate all
 
 install:
 	uv sync
 
 emulator:
 	gcloud beta emulators pubsub start --host-port=localhost:8085
+
+stop-emulator:
+	@ps aux | grep 'cloud-pubsub-emulator' | grep -v grep | awk '{print $$2}' | xargs -r kill -9 2>/dev/null; \
+	ps aux | grep 'emulators pubsub start' | grep -v grep | awk '{print $$2}' | xargs -r kill -9 2>/dev/null; \
+	echo "Pub/Sub Emulator stopped."
 
 mock-server:
 	uv run python mock_server.py
