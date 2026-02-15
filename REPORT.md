@@ -161,11 +161,84 @@ from apache_beam.io.gcp.pubsub import ReadFromPubSub
 # subscriber_options で max_outstanding_messages を制限
 ```
 
+## 追加検証: API レイテンシ 0-3 秒の場合
+
+API レイテンシを 0-1 秒から 0-3 秒に変更した場合の結果 (`max_concurrent_sends=1`)。
+
+| keys | batch | buffer | max/3s | avg/3s | throughput | result |
+| --- | --- | --- | --- | --- | --- | --- |
+| 5 | 20 | 2.0s | 80 | 44.4 | 19.3 msg/s | OK |
+| 10 | 20 | 2.0s | 80 | 44.4 | 19.3 msg/s | OK |
+| 5 | 30 | 2.0s | 120 | 66.6 | 29.0 msg/s | OK |
+| 10 | 30 | 2.0s | 120 | 66.6 | 29.0 msg/s | OK |
+| 1 | 20 | 2.0s | 100 | 45.2 | 20.7 msg/s | OK |
+| 1 | 30 | 2.0s | 150 | 67.7 | 31.0 msg/s | OK |
+| 5 | 40 | 2.0s | 160 | 88.7 | 38.7 msg/s | OK |
+| 10 | 40 | 2.0s | 160 | 88.5 | 38.7 msg/s | OK |
+| 1 | 40 | 2.0s | 200 | 90.3 | 41.3 msg/s | NG |
+
+API レイテンシが長くなると送信間隔が自然に広がり、制約を満たしやすくなる。
+ただしスループットは大幅に低下する (最大でも 38.7 msg/s)。
+
+## 追加検証: Dataflow 側で sleep を入れる場合
+
+`SendBatchToApiFn` 内で `time.sleep()` を追加した場合の結果 (`api_latency=0-1s, concurrency=1`)。
+
+### batch_size=20 の場合
+
+| keys | sleep | max/3s | avg/3s | throughput | result |
+| --- | --- | --- | --- | --- | --- |
+| 3 | 0.0s | 200 | 113.3 | 52.7 msg/s | NG |
+| 3 | 0.5s | 100 | 61.7 | 28.0 msg/s | OK |
+| 3 | 1.0s | 60 | 41.5 | 18.7 msg/s | OK |
+
+### batch_size=30 の場合
+
+| keys | sleep | max/3s | avg/3s | throughput | result |
+| --- | --- | --- | --- | --- | --- |
+| 3 | 0.0s | 300 | 170.0 | 79.0 msg/s | NG |
+| 3 | 0.5s | 150 | 92.6 | 42.0 msg/s | OK |
+| 3 | 1.0s | 90 | 62.3 | 28.0 msg/s | OK |
+
+### batch_size=40 の場合
+
+| keys | sleep | max/3s | avg/3s | throughput | result |
+| --- | --- | --- | --- | --- | --- |
+| 3 | 0.0s | 400 | 226.7 | 105.3 msg/s | NG |
+| 3 | 0.5s | 200 | 123.4 | 56.0 msg/s | NG |
+| 3 | 1.0s | 120 | 83.0 | 37.3 msg/s | OK |
+
+### sleep 方式の評価
+
+sleep 方式は制約を満たす有効な手段である。
+
+**スループットを最大化する最適な組み合わせ:**
+
+| 構成 | sleep | max/3s | throughput |
+| --- | --- | --- | --- |
+| batch=40, sleep=1.0s | 1.0s | 120 | 37.3 msg/s |
+| batch=30, sleep=0.5s | 0.5s | 150 | 42.0 msg/s |
+| batch=20, sleep=0.5s | 0.5s | 100 | 28.0 msg/s |
+
+**`batch_size=30, sleep=0.5s` が最もスループットが高く、制約に対して余裕もある。**
+
+ただし以下の注意点がある。
+
+- sleep 中もワーカーリソースを占有するため、Dataflow のコスト効率が悪化する
+- 4000 msg/s の入力に対して 42 msg/s の処理は約 1% であり、メッセージは滞留し続ける
+- 滞留対策として複数ワーカーへの分散、または Pub/Sub の FlowControl による入力制限が必要
+
 ## 結論
 
 `GroupIntoBatches` のパラメータ調整だけでは、3 秒ウィンドウ 165 件の制約を安定的に満たせない。
 API レイテンシの分散によるバーストが根本原因である。
-送信 DoFn にレートリミッター (トークンバケット等) を組み込む必要がある。
+
+**sleep 方式は有効だが、単独では不十分。**
+`batch_size=30, sleep=0.5s, max_concurrent_sends=1` を基本とし、以下を組み合わせる必要がある。
+
+1. `SendBatchToApiFn` に `time.sleep(0.5)` を追加 (バースト抑制)
+2. 複数ワーカーで並列処理し、各ワーカーが独立にレート制限 (スループット確保)
+3. トークンバケット等のレートリミッターで厳密に制御 (安全マージン確保)
 
 ## 再現手順
 

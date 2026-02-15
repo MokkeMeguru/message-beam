@@ -27,6 +27,8 @@ class SimulationConfig:
     # API レイテンシ範囲 (秒)
     api_latency_min: float = 0.0
     api_latency_max: float = 1.0
+    # 送信後の強制 sleep (秒) — DoFn 内で time.sleep() を入れる想定
+    send_sleep_secs: float = 0.0
     # シミュレーション時間 (秒)
     simulation_duration: float = 30.0
     # レート制約: ウィンドウサイズ (秒)
@@ -209,11 +211,11 @@ class PipelineSimulator:
                 self.key_buffer_start[key] = None
                 self.key_timeout_scheduled[key] = None
 
-            # API レイテンシ
+            # API レイテンシ + 強制 sleep
             latency = self.rng.uniform(
                 cfg.api_latency_min, cfg.api_latency_max
             )
-            complete_time = current_time + latency
+            complete_time = current_time + latency + cfg.send_sleep_secs
 
             heapq.heappush(
                 self.event_queue,
@@ -261,7 +263,7 @@ class PipelineSimulator:
             latency = self.rng.uniform(
                 self.config.api_latency_min, self.config.api_latency_max
             )
-            complete_time = event.time + latency
+            complete_time = event.time + latency + self.config.send_sleep_secs
 
             heapq.heappush(
                 self.event_queue,
