@@ -1,4 +1,4 @@
-"""互換 shim — simulator パッケージへの re-export。"""
+"""Dataflow パイプラインの離散イベントシミュレータ。"""
 
 from simulator.config import SimulationConfig
 from simulator.engine import Event, PipelineSimulator
@@ -10,8 +10,3 @@ __all__ = [
     "SimulationConfig",
     "SimulationResult",
 ]
-
-if __name__ == "__main__":
-    from simulator.cli import main
-
-    main(["simulate"])

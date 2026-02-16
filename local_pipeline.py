@@ -1,7 +1,9 @@
+import argparse
 import json
 import logging
 import os
 import random
+import time
 
 import apache_beam as beam
 import requests
@@ -20,6 +22,9 @@ class AddRandomKeyFn(beam.DoFn):
 class SendBatchToApiFn(beam.DoFn):
     """バッチ化されたメッセージをローカル Mock Server に POST する。"""
 
+    def __init__(self, sleep_secs: float = 0.0):
+        self.sleep_secs = sleep_secs
+
     def process(self, batch_element):
         key, messages = batch_element
         payload_list = []
@@ -34,8 +39,32 @@ class SendBatchToApiFn(beam.DoFn):
         except Exception as e:
             logging.error(f"Error: {e}")
 
+        # レート制御用 sleep
+        if self.sleep_secs > 0:
+            time.sleep(self.sleep_secs)
+
 
 def run():
+    parser = argparse.ArgumentParser(description="Beam Pipeline (DirectRunner)")
+    parser.add_argument(
+        "--batch-size", type=int, default=100, help="GroupIntoBatches のバッチサイズ"
+    )
+    parser.add_argument(
+        "--sleep", type=float, default=0.0, help="バッチ送信後の sleep 秒数"
+    )
+    parser.add_argument(
+        "--buffer-duration",
+        type=float,
+        default=2.0,
+        help="GroupIntoBatches のバッファリングタイムアウト (秒)",
+    )
+    args = parser.parse_args()
+
+    logging.info(
+        f"Config: batch_size={args.batch_size}, "
+        f"sleep={args.sleep}s, buffer_duration={args.buffer_duration}s"
+    )
+
     # エミュレータ設定
     os.environ["PUBSUB_EMULATOR_HOST"] = "localhost:8085"
 
@@ -73,9 +102,10 @@ def run():
             | "AddKeys" >> beam.ParDo(AddRandomKeyFn())
             | "Batch"
             >> beam.GroupIntoBatches(
-                batch_size=100, max_buffering_duration_secs=2
-            )  # テスト用に2秒
-            | "Send" >> beam.ParDo(SendBatchToApiFn())
+                batch_size=args.batch_size,
+                max_buffering_duration_secs=args.buffer_duration,
+            )
+            | "Send" >> beam.ParDo(SendBatchToApiFn(sleep_secs=args.sleep))
         )
 
 
